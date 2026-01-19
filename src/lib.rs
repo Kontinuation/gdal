@@ -125,6 +125,7 @@ mod thread_safe;
 mod utils;
 pub mod vector;
 pub mod version;
+pub mod vrt;
 pub mod vsi;
 
 pub use dataset::{Dataset, DatasetCapability};
