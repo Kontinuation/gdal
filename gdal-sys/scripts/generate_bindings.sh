@@ -4,9 +4,8 @@ set -e
 # install dependencies
 apt update && apt install -y libclang-dev mingw-w64 gcc-i686-linux-gnu pkg-config rustfmt xz-utils curl
 
-# install cargo and bindgen from source
-apt install -y cargo rustc
-cargo install bindgen-cli --version 0.71.1
+# install bindgen using the prebuilt binary installer
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/rust-lang/rust-bindgen/releases/download/v0.71.1/bindgen-cli-installer.sh | sh
 export PATH="$HOME/.cargo/bin:$PATH"
 
 # detect mingw gcc version (varies by ubuntu version: gcc-9 on 20.04, gcc-10 on 22.04, gcc-13 on 24.04)
