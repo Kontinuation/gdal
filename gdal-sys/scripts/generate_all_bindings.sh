@@ -56,7 +56,10 @@ generate_bindings() {
     echo "Using image: $image"
     echo "========================================"
     
-    docker run --rm \
+    # Force x86_64 platform to ensure consistent struct layouts (e.g., struct stat)
+    # across different host architectures. Without this, ARM64 Macs would generate
+    # bindings with ARM64 glibc struct layouts, which would be incorrect for x86_64 Linux.
+    docker run --platform linux/amd64 --rm \
         -v "$GDAL_SYS_DIR:/gdal-sys" \
         -e GDAL_VERSION="$version_folder" \
         "$image" \
