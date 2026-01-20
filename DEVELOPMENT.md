@@ -17,6 +17,25 @@ These steps assume that there are no fundamental changes to the gdal build syste
 
 # Generating Bindings
 
+## Using the Scripts (Recommended)
+
+Scripts are provided in `gdal-sys/scripts/` to automate binding generation:
+
+```bash
+# Generate bindings for all GDAL versions (3.4 through 3.12)
+cd gdal-sys/scripts
+./generate_all_bindings.sh
+
+# Generate bindings for a specific GDAL version
+./generate_all_bindings.sh 3_11
+```
+
+The scripts use Docker images for each GDAL version and handle differences in Ubuntu base versions (mingw gcc versions vary: 9 on Ubuntu 20.04, 10 on 22.04, 13 on 24.04).
+
+## Manual Generation
+
+If you prefer to generate bindings manually or need to debug the process:
+
 ```bash
 docker run -it --rm -v ./gdal-sys:/gdal-sys:z -w /gdal-sys -e GDAL_VERSION=3_12 ghcr.io/osgeo/gdal:ubuntu-full-3.12.0 bash
 # everything from now on is inside of the container
