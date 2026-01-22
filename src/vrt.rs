@@ -38,15 +38,16 @@
 //! ```
 
 use std::ffi::CString;
+use std::ops::{Deref, DerefMut};
 use std::ptr::null_mut;
 
 use gdal_sys::{
-    CPLErr, GDALAddBand, GDALClose, GDALDatasetH, GDALGetRasterBand, GDALRasterBandH,
-    GDALSetGeoTransform, GDALSetProjection, VRTAddSimpleSource, VRTCreate, VRTDatasetH,
+    CPLErr, GDALAddBand, GDALDatasetH, GDALRasterBandH, VRTAddSimpleSource, VRTCreate,
     VRTSourcedRasterBandH,
 };
 
-use crate::errors::{GdalError, Result};
+use crate::cpl::CslStringList;
+use crate::errors::Result;
 use crate::raster::{GdalDataType, RasterBand};
 use crate::utils::{_last_cpl_err, _last_null_pointer_err};
 use crate::Dataset;
@@ -65,15 +66,7 @@ pub const NODATA_UNSET: f64 = -1234.56;
 ///
 /// When dropped, the VRT dataset is automatically closed.
 pub struct VrtDataset {
-    c_dataset: VRTDatasetH,
-}
-
-impl Drop for VrtDataset {
-    fn drop(&mut self) {
-        unsafe {
-            GDALClose(self.c_dataset as GDALDatasetH);
-        }
-    }
+    dataset: Dataset,
 }
 
 // GDAL Docs state: The returned dataset should only be accessed by one thread at a time.
@@ -105,90 +98,18 @@ impl VrtDataset {
             return Err(_last_null_pointer_err("VRTCreate"));
         }
 
-        Ok(VrtDataset { c_dataset })
+        Ok(VrtDataset {
+            dataset: unsafe { Dataset::from_c_dataset(c_dataset as GDALDatasetH) },
+        })
     }
 
-    /// Returns the raw VRT dataset handle.
+    /// Converts this VRT into a GDAL `Dataset` wrapper, transferring ownership.
     ///
-    /// # Safety
-    /// The returned handle is only valid for the lifetime of this struct.
-    /// Do not close or transfer ownership of the handle.
-    pub fn c_dataset(&self) -> VRTDatasetH {
-        self.c_dataset
-    }
-
-    /// Returns the VRT dataset as a GDAL dataset handle.
-    ///
-    /// This is useful for calling GDAL functions that expect a `GDALDatasetH`.
-    pub fn as_gdal_dataset_handle(&self) -> GDALDatasetH {
-        self.c_dataset as GDALDatasetH
-    }
-
-    /// Creates a GDAL `Dataset` wrapper for this VRT.
-    ///
-    /// # Safety
-    /// The returned Dataset borrows from this VrtDataset and must not outlive it.
-    /// The caller must ensure the Dataset is dropped before this VrtDataset.
-    /// Do not call `GDALClose` on the returned dataset.
-    pub unsafe fn as_dataset(&self) -> Dataset {
-        Dataset::from_c_dataset(self.c_dataset as GDALDatasetH)
-    }
-
-    /// Sets the geotransform for the VRT dataset.
-    ///
-    /// # Arguments
-    /// * `transform` - A 6-element array containing the geotransform coefficients:
-    ///   `[origin_x, pixel_width, rotation_x, origin_y, rotation_y, pixel_height]`
-    ///
-    /// # Example
-    /// ```rust, no_run
-    /// use gdal::vrt::VrtDataset;
-    ///
-    /// # fn main() -> gdal::errors::Result<()> {
-    /// let mut vrt = VrtDataset::create(100, 100)?;
-    /// // Set origin at (0, 100), 1 unit per pixel, no rotation
-    /// vrt.set_geo_transform(&[0.0, 1.0, 0.0, 100.0, 0.0, -1.0])?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn set_geo_transform(&mut self, transform: &[f64; 6]) -> Result<()> {
-        let mut transform_copy = *transform;
-        let rv = unsafe {
-            GDALSetGeoTransform(self.c_dataset as GDALDatasetH, transform_copy.as_mut_ptr())
-        };
-
-        if rv != CPLErr::CE_None {
-            return Err(_last_cpl_err(rv));
-        }
-        Ok(())
-    }
-
-    /// Sets the spatial reference system (projection) for the VRT dataset.
-    ///
-    /// # Arguments
-    /// * `projection` - A WKT string or other GDAL-supported projection specification
-    ///
-    /// # Example
-    /// ```rust, no_run
-    /// use gdal::vrt::VrtDataset;
-    ///
-    /// # fn main() -> gdal::errors::Result<()> {
-    /// let mut vrt = VrtDataset::create(100, 100)?;
-    /// vrt.set_projection("EPSG:4326")?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn set_projection(&mut self, projection: &str) -> Result<()> {
-        let c_projection = CString::new(projection)
-            .map_err(|_| GdalError::BadArgument("Projection string contains null byte".into()))?;
-
-        let rv =
-            unsafe { GDALSetProjection(self.c_dataset as GDALDatasetH, c_projection.as_ptr()) };
-
-        if rv != CPLErr::CE_None {
-            return Err(_last_cpl_err(rv));
-        }
-        Ok(())
+    /// After calling this, the returned `Dataset` owns the underlying GDAL handle
+    /// and will close it on drop. This `VrtDataset` must not be used afterwards.
+    pub fn as_dataset(self) -> Dataset {
+        let VrtDataset { dataset } = self;
+        dataset
     }
 
     /// Adds a new band to the VRT dataset.
@@ -215,13 +136,16 @@ impl VrtDataset {
     pub fn add_band(
         &mut self,
         data_type: GdalDataType,
-        _options: Option<&[&str]>,
+        options: Option<&[&str]>,
     ) -> Result<usize> {
+        let c_options = options
+            .map(|opts| CslStringList::from_iter(opts.iter().copied()))
+            .unwrap_or_default();
         let rv = unsafe {
             GDALAddBand(
-                self.c_dataset as GDALDatasetH,
+                self.dataset.c_dataset(),
                 data_type.gdal_ordinal(),
-                null_mut(),
+                c_options.as_ptr(),
             )
         };
 
@@ -233,11 +157,6 @@ impl VrtDataset {
         Ok(self.raster_count())
     }
 
-    /// Returns the number of raster bands in the VRT dataset.
-    pub fn raster_count(&self) -> usize {
-        (unsafe { gdal_sys::GDALGetRasterCount(self.c_dataset as GDALDatasetH) }) as usize
-    }
-
     /// Fetches a band from the VRT dataset.
     ///
     /// # Arguments
@@ -246,17 +165,28 @@ impl VrtDataset {
     /// # Returns
     /// A `VrtRasterBand` wrapper for the band.
     pub fn rasterband(&self, band_index: usize) -> Result<VrtRasterBand<'_>> {
-        let c_band =
-            unsafe { GDALGetRasterBand(self.c_dataset as GDALDatasetH, band_index as i32) };
+        let band = self.dataset.rasterband(band_index)?;
+        Ok(VrtRasterBand { band })
+    }
+}
 
-        if c_band.is_null() {
-            return Err(_last_null_pointer_err("GDALGetRasterBand"));
-        }
+impl Deref for VrtDataset {
+    type Target = Dataset;
 
-        Ok(VrtRasterBand {
-            c_band,
-            _dataset: self,
-        })
+    fn deref(&self) -> &Self::Target {
+        &self.dataset
+    }
+}
+
+impl DerefMut for VrtDataset {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.dataset
+    }
+}
+
+impl AsRef<Dataset> for VrtDataset {
+    fn as_ref(&self) -> &Dataset {
+        &self.dataset
     }
 }
 
@@ -264,14 +194,13 @@ impl VrtDataset {
 ///
 /// This struct provides methods specific to VRT bands, such as adding sources.
 pub struct VrtRasterBand<'a> {
-    c_band: GDALRasterBandH,
-    _dataset: &'a VrtDataset,
+    band: RasterBand<'a>,
 }
 
 impl<'a> VrtRasterBand<'a> {
     /// Returns the raw GDAL raster band handle.
     pub fn c_rasterband(&self) -> GDALRasterBandH {
-        self.c_band
+        unsafe { self.band.c_rasterband() }
     }
 
     /// Adds a simple source to this VRT band.
@@ -330,7 +259,7 @@ impl<'a> VrtRasterBand<'a> {
 
         let rv = unsafe {
             VRTAddSimpleSource(
-                self.c_band as VRTSourcedRasterBandH,
+                self.band.c_rasterband() as VRTSourcedRasterBandH,
                 source_band.c_rasterband(),
                 src_window.0, // nSrcXOff
                 src_window.1, // nSrcYOff
@@ -356,12 +285,32 @@ impl<'a> VrtRasterBand<'a> {
     /// # Arguments
     /// * `nodata` - The nodata value to set
     pub fn set_no_data_value(&self, nodata: f64) -> Result<()> {
-        let rv = unsafe { gdal_sys::GDALSetRasterNoDataValue(self.c_band, nodata) };
+        let rv = unsafe { gdal_sys::GDALSetRasterNoDataValue(self.band.c_rasterband(), nodata) };
 
         if rv != CPLErr::CE_None {
             return Err(_last_cpl_err(rv));
         }
         Ok(())
+    }
+}
+
+impl<'a> Deref for VrtRasterBand<'a> {
+    type Target = RasterBand<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.band
+    }
+}
+
+impl<'a> DerefMut for VrtRasterBand<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.band
+    }
+}
+
+impl<'a> AsRef<RasterBand<'a>> for VrtRasterBand<'a> {
+    fn as_ref(&self) -> &RasterBand<'a> {
+        &self.band
     }
 }
 
@@ -373,6 +322,7 @@ mod tests {
     fn test_vrt_create() {
         let vrt = VrtDataset::create(100, 100).unwrap();
         assert_eq!(vrt.raster_count(), 0);
+        assert!(vrt.c_dataset() != null_mut());
     }
 
     #[test]
@@ -398,10 +348,5 @@ mod tests {
     fn test_vrt_set_projection() {
         let mut vrt = VrtDataset::create(100, 100).unwrap();
         vrt.set_projection("EPSG:4326").unwrap();
-    }
-
-    #[test]
-    fn test_nodata_unset_constant() {
-        assert_eq!(NODATA_UNSET, -1234.56);
     }
 }
