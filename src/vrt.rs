@@ -133,11 +133,7 @@ impl VrtDataset {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn add_band(
-        &mut self,
-        data_type: GdalDataType,
-        options: Option<&[&str]>,
-    ) -> Result<usize> {
+    pub fn add_band(&mut self, data_type: GdalDataType, options: Option<&[&str]>) -> Result<usize> {
         let c_options = options
             .map(|opts| CslStringList::from_iter(opts.iter().copied()))
             .unwrap_or_default();
@@ -242,7 +238,7 @@ impl<'a> VrtRasterBand<'a> {
     /// ```
     pub fn add_simple_source(
         &self,
-        source_band: &RasterBand,
+        source_band: &RasterBand<'a>,
         src_window: (i32, i32, i32, i32),
         dst_window: (i32, i32, i32, i32),
         resampling: Option<&str>,
@@ -317,6 +313,7 @@ impl<'a> AsRef<RasterBand<'a>> for VrtRasterBand<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::fixture;
 
     #[test]
     fn test_vrt_create() {
@@ -348,5 +345,35 @@ mod tests {
     fn test_vrt_set_projection() {
         let mut vrt = VrtDataset::create(100, 100).unwrap();
         vrt.set_projection("EPSG:4326").unwrap();
+    }
+
+    #[test]
+    fn test_vrt_add_simple_source() {
+        let source = Dataset::open(fixture("m_3607824_se_17_1_20160620_sub.tif")).unwrap();
+        let source_band_type = source.rasterband(1).unwrap().band_type();
+
+        let mut vrt = VrtDataset::create(1, 1).unwrap();
+        vrt.add_band(source_band_type, None).unwrap();
+
+        // Keep the source and VRT band borrows in the same scope so the lifetime
+        // relationship is satisfied.
+        let source_band = source.rasterband(1).unwrap();
+        let vrt_band = vrt.rasterband(1).unwrap();
+
+        // Map the first pixel of the source to the only pixel in the VRT.
+        vrt_band
+            .add_simple_source(&source_band, (0, 0, 1, 1), (0, 0, 1, 1), None, None)
+            .unwrap();
+
+        let source_px = source_band
+            .read_as::<f64>((0, 0), (1, 1), (1, 1), None)
+            .unwrap()
+            .data()[0];
+        let vrt_px = vrt_band
+            .read_as::<f64>((0, 0), (1, 1), (1, 1), None)
+            .unwrap()
+            .data()[0];
+
+        assert_eq!(vrt_px, source_px);
     }
 }
