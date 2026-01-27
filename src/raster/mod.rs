@@ -79,6 +79,7 @@ pub use create_options::RasterCreationOptions;
 pub use mdarray::{
     Attribute, Dimension, ExtendedDataType, ExtendedDataTypeClass, Group, MDArray, MdStatisticsAll,
 };
+pub use polygonize::{polygonize, PolygonizeOptions};
 pub use rasterband::{
     CmykEntry, ColorEntry, ColorInterpretation, ColorTable, GrayEntry, Histogram, HlsEntry,
     PaletteInterpretation, RasterBand, ResampleAlg, RgbaEntry, StatisticsAll, StatisticsMinMax,
@@ -90,6 +91,7 @@ pub use warp::reproject;
 mod buffer;
 mod create_options;
 mod mdarray;
+mod polygonize;
 pub mod processing;
 mod rasterband;
 mod rasterize;
